@@ -1,14 +1,14 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional
 
 class RegisterRequest(BaseModel):
     name: str
-    email: EmailStr
+    email: str
     password: str
     role: str = 'MEMBER'
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 class TokenResponse(BaseModel):

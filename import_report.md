@@ -9,8 +9,6 @@
 **Rows Successfully Imported**: 13  
 **Rows Skipped/Rejected**: 29  
 
----
-
 ## Detailed Anomaly Resolutions Log
 
 Below is the complete audit trail of all anomalies detected by the ingestion pipeline and the actions taken as per the system policies:
@@ -64,8 +62,6 @@ Below is the complete audit trail of all anomalies detected by the ingestion pip
 | 39 | Housewarming drinks | `MEMBER_NOT_ACTIVE` | **MEDIUM** | 'Sam' joined on 2026-04-15 but expense date 2026-04-10 is before they joined | `REJECT` | Rejected because Sam was not active (joined April 15) |
 | 40 | Electricity Apr | `MEMBER_NOT_ACTIVE` | **MEDIUM** | 'Sam' joined on 2026-04-15 but expense date 2026-04-12 is before they joined | `REJECT` | Rejected because Sam was not active (joined April 15) |
 
----
-
 ## Summary of Conversion Rates Applied
 
 The following USD conversion rates were retrieved from **Frankfurter.app** (live historical API) during ingestion of matching foreign currency rows:
@@ -73,8 +69,6 @@ The following USD conversion rates were retrieved from **Frankfurter.app** (live
 - **Beach shack lunch** (Row 21): USD converted to INR. Rate frozen in `CurrencyConversionApplied` event.
 - **Parasailing** (Row 23): USD checked but row discarded (Kabir unknown member).
 - **Parasailing refund** (Row 26): USD converted to INR. Refund credit rate frozen in `CurrencyConversionApplied` event.
-
----
 
 ## Audit Trail Verification
 Every decision documented above has been logged as an immutable event in the Event Store:

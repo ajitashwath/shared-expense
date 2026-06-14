@@ -1,10 +1,8 @@
-# SCOPE — Anomaly Log & Database Schema
+# SCOPE.md
 
 ## Anomaly Log: expenses_export.csv
-
 Every data problem found in the CSV and how the system handles it.
 
----
 
 ### Row-by-Row Anomaly Inventory
 
@@ -37,8 +35,6 @@ Every data problem found in the CSV and how the system handles it.
 | 39 | Housewarming drinks | `MEMBER_NOT_ACTIVE` | MEDIUM | Sam not active on April 10 (joined April 15); exclude Sam or reject row. |
 | 40 | Electricity Apr | `MEMBER_NOT_ACTIVE` | MEDIUM | Sam not active on April 12 (joined April 15); exclude Sam or reject row. |
 | 42 | Furniture | `NONSTANDARD_SPLIT_TYPE` | MEDIUM | split_type equal has shares split_details; verify and override. |
-
----
 
 ## Anomaly Resolution Policies
 
@@ -82,8 +78,6 @@ Every data problem found in the CSV and how the system handles it.
 - **Specify Payer**: User selects which member paid.
 - **Reject**: Row is discarded.
 
----
-
 ## Key Data Decisions
 
 ### Sam's Requirement
@@ -105,8 +99,6 @@ If approved by the user (override), Sam is included. If rejected, the expense is
 > "Half the trip was in dollars. The sheet pretends a dollar is a rupee. That can't be right."
 
 **Decision**: USD amounts are detected as `CURRENCY_MISMATCH`. When approved, the system converts using the live historical exchange rate for the exact expense date (fetched from Frankfurter API). The `CurrencyConversionApplied` event stores all conversion metadata. Historical expenses are NEVER recalculated with future exchange rates.
-
----
 
 ## Database Schema
 
@@ -224,8 +216,6 @@ projection_import_reports
 ├── resolved_count, pending_count
 └── anomaly_summary (JSON)  # {category: count} breakdown
 ```
-
----
 
 ## Event Catalog
 

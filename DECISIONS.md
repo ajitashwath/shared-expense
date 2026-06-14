@@ -1,10 +1,7 @@
 # DECISIONS.md
 Each decision, the alternatives considered, and the rationale.
 
----
-
 ## D1: Event Sourcing vs. Traditional CRUD
-
 **Decision**: Hybrid Event Sourcing — append-only `event_store` table, with derived projection tables for read performance.
 
 **Alternatives**:
@@ -14,10 +11,8 @@ Each decision, the alternatives considered, and the rationale.
 
 **Why**: The assignment explicitly requires explainability ("I want to see exactly which expenses make up ₹2,300"). This requires an audit trail. Event sourcing is the only architecture that guarantees this without storing computed intermediates.
 
----
 
 ## D2: Prisma Client Python vs. SQLAlchemy
-
 **Decision**: Use `prisma-client-py` — the Python port of Prisma using the same `schema.prisma` file.
 
 **Alternatives**:
@@ -29,10 +24,8 @@ Each decision, the alternatives considered, and the rationale.
 
 **Risk**: `prisma-client-py` is community-maintained and may lag behind the Prisma TypeScript client in features.
 
----
 
 ## D3: Currency Conversion — Fixed Rate vs. Live API
-
 **Decision**: Use Frankfurter.app live historical API to fetch exchange rates per expense date.
 
 **Alternatives**:
@@ -41,8 +34,6 @@ Each decision, the alternatives considered, and the rationale.
 - **Frankfurter.app**: Free, no API key, supports historical rates by date. Returns rate for the exact expense date.
 
 **Key constraint**: Once an expense is imported, the rate used is FROZEN in the `CurrencyConversionApplied` event. Even if Frankfurter rates change tomorrow, historical expenses are never recalculated. This is Priya's requirement: "The sheet pretends a dollar is a rupee. That can't be right" — so we convert correctly at import time, and that rate is permanent.
-
----
 
 ## D4: Anomaly Resolution Policy — Never Auto-Delete
 
@@ -57,10 +48,8 @@ Each decision, the alternatives considered, and the rationale.
 - Each anomaly decision generates `AnomalyResolved` event with user ID + timestamp
 - Import report shows all decisions made
 
----
 
 ## D5: Membership Policy
-
 **Decision**: Default membership policy is STRICT. Groups can switch to INCLUSIVE.
 
 **STRICT** (default): Members outside their active period are excluded from expense splits. A March expense cannot include Sam (joined April 15).
@@ -69,10 +58,8 @@ Each decision, the alternatives considered, and the rationale.
 
 **Why**: Sam's requirement is explicit: "I moved in mid-April. Why would March electricity affect my balance?" STRICT is the safe default. INCLUSIVE is the escape hatch when the group decides they want to share costs differently.
 
----
 
 ## D6: Split Types
-
 **Decision**: Support 5 split types: EQUAL, PERCENTAGE, EXACT, SHARES, CUSTOM.
 
 **From actual CSV**:
@@ -87,20 +74,14 @@ Each decision, the alternatives considered, and the rationale.
 - `"unequal"` → mapped to `"exact"` (treated as exact amounts)
 Both are flagged as `NONSTANDARD_SPLIT_TYPE` anomalies but auto-aliased if user approves.
 
----
-
 ## D7: Amount Rounding
-
 **Decision**: Round all amounts to 2 decimal places. Distribute remainder to the first participant.
 
 **Why**: Division isn't always clean (e.g., ₹1000 / 3 = ₹333.33...). The sum must equal the total expense. Strategy: floor divide, give remainder to first person.
 
 **Edge case from CSV**: Row 10 has amount `899.995` — three decimal places. We round to `900.00` at import time. This is documented as-is.
 
----
-
 ## D8: Zero-Amount Expense Handling
-
 **Decision**: Zero-amount expenses are flagged as `ZERO_AMOUNT` anomalies (MEDIUM severity) and require user action.
 
 **From CSV**: Row 31 — "Dinner order, ₹0, counted twice earlier - fixing later"
@@ -109,8 +90,6 @@ Both are flagged as `NONSTANDARD_SPLIT_TYPE` anomalies but auto-aliased if user 
 - **Auto-reject**: Simpler. But violates Meera's policy (never auto-delete).
 - **Import as-is**: Clutters the expense list with meaningless rows.
 - **Flag for review**: User sees the note "counted twice earlier - fixing later" and can reject it.
-
----
 
 ## D9: JWT Auth — Self-Managed vs. NextAuth
 
@@ -122,10 +101,7 @@ Both are flagged as `NONSTANDARD_SPLIT_TYPE` anomalies but auto-aliased if user 
 
 **Role system**: ADMIN (can import, manage members), MEMBER (can add expenses), VIEWER (read-only).
 
----
-
 ## D10: Balance Calculation Algorithm
-
 **Decision**: Greedy debt simplification — minimize the number of transactions needed to settle all debts.
 
 **Algorithm**:
@@ -136,10 +112,8 @@ Both are flagged as `NONSTANDARD_SPLIT_TYPE` anomalies but auto-aliased if user 
 
 **Why**: Aisha wants "one number per person — who pays whom, how much, done." Without simplification, you'd need N×(N-1) pairs. With greedy simplification, you get at most N-1 transfers.
 
----
 
 ## D11: PostgreSQL as Event Store
-
 **Decision**: Use PostgreSQL for BOTH the event store and projections.
 
 **Alternatives**:
@@ -149,10 +123,7 @@ Both are flagged as `NONSTANDARD_SPLIT_TYPE` anomalies but auto-aliased if user 
 
 **Guarantee**: Application code never updates or deletes from `event_store`. Only `INSERT` is allowed.
 
----
-
 ## D12: How to Handle "Dev's friend Kabir" (Row 23)
-
 **Row 23**: Parasailing, Dev, $150 USD. Notes: "Kabir joined for the day". Split with: "Aisha;Rohan;Priya;Dev;Dev's friend Kabir".
 
 **Decision**: "Dev's friend Kabir" is explicitly included in the `split_with` column but is not a registered group member. The system correctly triggers the `UNKNOWN_MEMBER` anomaly (HIGH severity). The user must decide how to handle this:
@@ -161,21 +132,15 @@ Both are flagged as `NONSTANDARD_SPLIT_TYPE` anomalies but auto-aliased if user 
 
 **Policy documented in SCOPE.md**: Anomaly detection correctly validates and flags unregistered names found inside the `split_with` or `split_details` columns.
 
-
----
-
 ## D13: "Priya S" in Row 11
-
 **Row 11**: paid_by = "Priya S" — not the same as "Priya" in the system.
 
 **Decision**: Trigger `UNKNOWN_MEMBER` anomaly (HIGH severity). User must map "Priya S" to the known member "Priya" or reject the row.
 
 **Why not auto-map**: "Priya S" could be a different Priya who split one expense. The system cannot make this decision safely.
 
----
 
 ## D14: Conflicting Duplicates Detection Algorithm
-
 **Rows 24 & 25**: "Dinner at Thalassa" (₹2400, Aisha) and "Thalassa dinner" (₹2450, Rohan) — same day, similar description, different amounts and payers.
 
 **Detection**: Word overlap Jaccard similarity ≥ 0.5 on the same date = `CONFLICTING_DUPLICATES` (HIGH severity).
