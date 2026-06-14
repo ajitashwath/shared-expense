@@ -1,0 +1,297 @@
+// Shared Expenses App — Prisma Schema
+// Architecture: Hybrid Event Sourcing with PostgreSQL
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider             = "prisma-client-py"
+  interface            = "asyncio"
+  recursive_type_depth = 5
+}
+
+// ============================================================
+// EVENT STORE — Core immutable append-only event log
+// ============================================================
+
+model EventStore {
+  id            String   @id @default(cuid())
+  aggregateId   String
+  aggregateType String   // User | Group | Expense | Settlement | Import
+  eventType     String   // UserRegistered | ExpenseCreated | ...
+  eventVersion  Int      @default(1)
+  eventPayload  Json
+  createdAt     DateTime @default(now())
+  createdBy     String?  // user ID who triggered the event
+
+  @@index([aggregateId])
+  @@index([aggregateType, eventType])
+  @@index([createdAt])
+  @@map("event_store")
+}
+
+// ============================================================
+// IMPORT INFRASTRUCTURE — Raw CSV storage (never deleted)
+// ============================================================
+
+model ImportBatch {
+  id              String       @id @default(cuid())
+  filename        String
+  uploadedBy      String
+  totalRows       Int          @default(0)
+  validRows       Int          @default(0)
+  anomalyCount    Int          @default(0)
+  importedRows    Int          @default(0)
+  status          ImportStatus @default(PENDING)
+  startedAt       DateTime     @default(now())
+  completedAt     DateTime?
+  groupId         String?
+
+  rawRows         RawImportRow[]
+  anomalies       Anomaly[]
+
+  @@map("import_batches")
+}
+
+model RawImportRow {
+  id            String      @id @default(cuid())
+  batchId       String
+  rowNumber     Int
+  rawData       Json        // full original CSV row as-is
+  status        RowStatus   @default(PENDING)
+  processedAt   DateTime?
+  eventId       String?     // which event was generated from this row
+
+  batch         ImportBatch @relation(fields: [batchId], references: [id])
+  anomalies     Anomaly[]
+
+  @@index([batchId])
+  @@map("raw_import_rows")
+}
+
+model Anomaly {
+  id                  String          @id @default(cuid())
+  batchId             String
+  rawRowId            String?
+  rowNumber           Int
+  category            AnomalyCategory
+  severity            Severity
+  rawData             Json
+  detectedRule        String
+  suggestedResolution String
+  userDecision        UserDecision?
+  decidedBy           String?
+  decidedAt           DateTime?
+  notes               String?
+
+  batch               ImportBatch     @relation(fields: [batchId], references: [id])
+  rawRow              RawImportRow?   @relation(fields: [rawRowId], references: [id])
+
+  @@index([batchId])
+  @@index([category, severity])
+  @@map("anomalies")
+}
+
+// ============================================================
+// PROJECTIONS — Read models (derived from events, rebuildable)
+// ============================================================
+
+model ProjectionUser {
+  id            String   @id
+  email         String   @unique
+  name          String
+  passwordHash  String
+  role          UserRole @default(MEMBER)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastEventId   String?
+
+  memberships   ProjectionMembership[]
+  expenses      ProjectionExpense[]    @relation("PaidByUser")
+
+  @@map("projection_users")
+}
+
+model ProjectionGroup {
+  id               String            @id
+  name             String
+  description      String?
+  membershipPolicy MembershipPolicy  @default(STRICT)
+  createdBy        String
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  lastEventId      String?
+
+  memberships      ProjectionMembership[]
+  expenses         ProjectionExpense[]
+  balances         ProjectionBalance[]
+
+  @@map("projection_groups")
+}
+
+model ProjectionMembership {
+  id          String    @id @default(cuid())
+  userId      String
+  groupId     String
+  joinedAt    DateTime
+  leftAt      DateTime?
+  isActive    Boolean   @default(true)
+  addedBy     String?
+
+  user        ProjectionUser  @relation(fields: [userId], references: [id])
+  group       ProjectionGroup @relation(fields: [groupId], references: [id])
+
+  @@unique([userId, groupId, joinedAt])
+  @@index([groupId])
+  @@map("projection_memberships")
+}
+
+model ProjectionExpense {
+  id              String        @id
+  groupId         String
+  description     String
+  amount          Float
+  currency        String        @default("INR")
+  originalAmount  Float?        // before currency conversion
+  originalCurrency String?
+  conversionRate  Float?
+  paidById        String
+  splitType       SplitType
+  expenseDate     DateTime
+  isImported      Boolean       @default(false)
+  importBatchId   String?
+  rawRowId        String?
+  isSettlement    Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  lastEventId     String?
+
+  group           ProjectionGroup @relation(fields: [groupId], references: [id])
+  paidBy          ProjectionUser  @relation("PaidByUser", fields: [paidById], references: [id])
+  splits          ProjectionExpenseSplit[]
+
+  @@index([groupId])
+  @@index([expenseDate])
+  @@map("projection_expenses")
+}
+
+model ProjectionExpenseSplit {
+  id          String   @id @default(cuid())
+  expenseId   String
+  userId      String
+  amount      Float    // final amount this person owes (in INR)
+  percentage  Float?   // if percentage split
+  shares      Int?     // if shares split
+  isActive    Boolean  @default(true)
+
+  expense     ProjectionExpense @relation(fields: [expenseId], references: [id])
+
+  @@index([expenseId])
+  @@index([userId])
+  @@map("projection_expense_splits")
+}
+
+model ProjectionBalance {
+  id          String   @id @default(cuid())
+  userId      String
+  groupId     String
+  netBalance  Float    @default(0) // positive = owed to user, negative = user owes
+  updatedAt   DateTime @updatedAt
+
+  group       ProjectionGroup @relation(fields: [groupId], references: [id])
+
+  @@unique([userId, groupId])
+  @@index([groupId])
+  @@map("projection_balances")
+}
+
+model ProjectionImportReport {
+  id              String   @id @default(cuid())
+  batchId         String   @unique
+  filename        String
+  totalRows       Int
+  importedRows    Int
+  anomalyCount    Int
+  resolvedCount   Int      @default(0)
+  pendingCount    Int      @default(0)
+  anomalySummary  Json     // { category: count } map
+  createdAt       DateTime @default(now())
+
+  @@map("projection_import_reports")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum MembershipPolicy {
+  STRICT     // exclude members outside active period
+  INCLUSIVE  // allow manual override, flag as anomaly
+}
+
+enum SplitType {
+  EQUAL
+  PERCENTAGE
+  EXACT
+  SHARES
+  CUSTOM
+}
+
+enum ImportStatus {
+  PENDING
+  PROCESSING
+  REVIEW
+  COMPLETED
+  FAILED
+}
+
+enum RowStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  IMPORTED
+}
+
+enum AnomalyCategory {
+  DUPLICATE_EXPENSE
+  NEGATIVE_AMOUNT
+  INVALID_DATE
+  UNKNOWN_MEMBER
+  SETTLEMENT_AS_EXPENSE
+  CURRENCY_MISMATCH
+  MEMBER_NOT_ACTIVE
+  EMPTY_DESCRIPTION
+  SPLIT_MISMATCH
+  CONFLICTING_DUPLICATES
+  ZERO_AMOUNT
+  MISSING_PAYER
+  AMOUNT_FORMAT
+  NONSTANDARD_SPLIT_TYPE
+  MISSING_CURRENCY
+  NAME_CASE_MISMATCH
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum UserDecision {
+  APPROVE
+  REJECT
+  MERGE
+  OVERRIDE
+  SKIP
+}
