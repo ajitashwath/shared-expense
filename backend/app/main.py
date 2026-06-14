@@ -9,7 +9,18 @@ from app.routers import auth, groups, expenses, settlements, imports, balances, 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    try:
+        os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    except OSError as e:
+        # Fall back to /tmp/uploads in read-only filesystems (e.g. Vercel)
+        if e.errno == 30 or 'Read-only' in str(e):
+            settings.UPLOAD_DIR = '/tmp/uploads'
+            try:
+                os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+            except OSError:
+                pass  # Ignore if it still fails since UPLOAD_DIR is not active in the import endpoints
+        else:
+            raise
     await prisma.connect()
     print(f'✅ Connected to database')
     yield
