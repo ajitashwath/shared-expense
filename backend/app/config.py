@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic import field_validator
+from typing import Any, Optional
 import json
 import os
 
@@ -15,19 +16,22 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 10
     USD_TO_INR_RATE: float = 83.5
     DEFAULT_MEMBERSHIP_POLICY: str = 'STRICT'
+    CORS_ORIGINS: list[str] | str = ['http://localhost:3000', 'http://127.0.0.1:3000']
 
-    @property
-    def CORS_ORIGINS(self) -> list[str]:
-        raw = os.environ.get('CORS_ORIGINS', '')
-        if not raw:
-            return ['http://localhost:3000', 'http://127.0.0.1:3000']
-        raw = raw.strip()
-        if raw.startswith('['):
-            try:
-                return json.loads(raw)
-            except Exception:
-                pass
-        return [o.strip() for o in raw.split(',') if o.strip()]
+    @field_validator('CORS_ORIGINS', mode='before')
+    @classmethod
+    def parse_cors_origins(cls, v: Any) -> list[str]:
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith('['):
+                try:
+                    return json.loads(v)
+                except Exception:
+                    pass
+            return [o.strip() for o in v.split(',') if o.strip()]
+        return v
 
     class Config:
         env_file = '.env'
