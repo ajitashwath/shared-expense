@@ -39,7 +39,6 @@ The Docker setup automatically:
 - Starts the FastAPI backend
 - Starts the Next.js frontend
 
----
 
 ## Local Development Setup
 
