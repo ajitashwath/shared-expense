@@ -1,6 +1,8 @@
 from prisma import Prisma
+from app.config import settings
 from contextlib import asynccontextmanager
-prisma = Prisma()
+
+prisma = Prisma(datasource={"url": settings.DATABASE_URL})
 
 async def get_db() -> Prisma:
     return prisma

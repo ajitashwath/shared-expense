@@ -22,11 +22,11 @@ async def lifespan(app: FastAPI):
         else:
             raise
     await prisma.connect()
-    print(f'✅ Connected to database')
+    print('Connected to database')
     yield
     if prisma.is_connected():
         await prisma.disconnect()
-    print('✅ Disconnected from database')
+    print('Disconnected from database')
 app = FastAPI(title='Shared Expenses API', description='Event-sourced shared expense tracking for flatmates', version=settings.APP_VERSION, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 app.include_router(auth.router)
