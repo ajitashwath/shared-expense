@@ -40,14 +40,48 @@ class ImportPipeline:
         members, timelines = await self._get_member_data(batch.groupId)
         all_row_dicts = [r.rawData for r in raw_rows]
         detector = AnomalyDetector(known_members=members, member_timelines=timelines, all_rows=all_row_dicts)
+        
+        anomalies_data = []
+        events_data = []
         total_anomalies = 0
+        
         for raw_row in raw_rows:
             row_data = raw_row.rawData or {}
             anomalies = detector.detect_all(row_data, raw_row.rowNumber)
             for anomaly in anomalies:
-                await self.db.anomaly.create(data={'batchId': batch_id, 'rawRowId': raw_row.id, 'rowNumber': anomaly.row_number, 'category': anomaly.category.value, 'severity': anomaly.severity.value, 'rawData': Json(anomaly.raw_data), 'detectedRule': anomaly.detected_rule, 'suggestedResolution': anomaly.suggested_resolution})
-                await self.event_store.append(DomainEvent(aggregate_id=batch_id, aggregate_type=AggregateType.IMPORT, event_type=EventType.ANOMALY_DETECTED, payload={'batch_id': batch_id, 'row_number': anomaly.row_number, 'category': anomaly.category.value, 'severity': anomaly.severity.value, 'detected_rule': anomaly.detected_rule, 'raw_data': anomaly.raw_data, 'suggested_resolution': anomaly.suggested_resolution}))
+                anomalies_data.append({
+                    'batchId': batch_id,
+                    'rawRowId': raw_row.id,
+                    'rowNumber': anomaly.row_number,
+                    'category': anomaly.category.value,
+                    'severity': anomaly.severity.value,
+                    'rawData': Json(anomaly.raw_data),
+                    'detectedRule': anomaly.detected_rule,
+                    'suggestedResolution': anomaly.suggested_resolution
+                })
+                events_data.append(
+                    DomainEvent(
+                        aggregate_id=batch_id,
+                        aggregate_type=AggregateType.IMPORT,
+                        event_type=EventType.ANOMALY_DETECTED,
+                        payload={
+                            'batch_id': batch_id,
+                            'row_number': anomaly.row_number,
+                            'category': anomaly.category.value,
+                            'severity': anomaly.severity.value,
+                            'detected_rule': anomaly.detected_rule,
+                            'raw_data': anomaly.raw_data,
+                            'suggested_resolution': anomaly.suggested_resolution
+                        }
+                    )
+                )
                 total_anomalies += 1
+                
+        if anomalies_data:
+            await self.db.anomaly.create_many(data=anomalies_data)
+        if events_data:
+            await self.event_store.append_many(events_data)
+            
         await self.db.importbatch.update(where={'id': batch_id}, data={'status': 'REVIEW', 'anomalyCount': total_anomalies})
         return {'batch_id': batch_id, 'total_rows': len(raw_rows), 'anomaly_count': total_anomalies}
 
@@ -58,6 +92,40 @@ class ImportPipeline:
         updated = await self.db.anomaly.update(where={'id': anomaly_id}, data={'userDecision': decision, 'decidedBy': decided_by, 'decidedAt': datetime.utcnow(), 'notes': notes})
         await self.event_store.append(DomainEvent(aggregate_id=anomaly.batchId, aggregate_type=AggregateType.IMPORT, event_type=EventType.ANOMALY_RESOLVED, payload={'anomaly_id': anomaly_id, 'batch_id': anomaly.batchId, 'row_number': anomaly.rowNumber, 'user_decision': decision, 'resolved_by': decided_by, 'notes': notes, 'category': anomaly.category}, created_by=decided_by))
         return {'anomaly_id': anomaly_id, 'decision': decision}
+
+    async def resolve_all_anomalies(self, batch_id: str, decision: str, decided_by: str, notes: Optional[str]=None) -> dict:
+        anomalies = await self.db.anomaly.find_many(where={'batchId': batch_id, 'userDecision': None})
+        if not anomalies:
+            return {'resolved_count': 0, 'decision': decision}
+            
+        anomaly_ids = [a.id for a in anomalies]
+        await self.db.anomaly.update_many(
+            where={'id': {'in': anomaly_ids}},
+            data={'userDecision': decision, 'decidedBy': decided_by, 'decidedAt': datetime.utcnow(), 'notes': notes}
+        )
+        
+        events_to_insert = []
+        for anomaly in anomalies:
+            events_to_insert.append(DomainEvent(
+                aggregate_id=anomaly.batchId,
+                aggregate_type=AggregateType.IMPORT,
+                event_type=EventType.ANOMALY_RESOLVED,
+                payload={
+                    'anomaly_id': anomaly.id,
+                    'batch_id': anomaly.batchId,
+                    'row_number': anomaly.rowNumber,
+                    'user_decision': decision,
+                    'resolved_by': decided_by,
+                    'notes': notes,
+                    'category': anomaly.category
+                },
+                created_by=decided_by
+            ))
+            
+        if events_to_insert:
+            await self.event_store.append_many(events_to_insert)
+            
+        return {'resolved_count': len(anomalies), 'decision': decision}
 
     async def commit_import(self, batch_id: str, committed_by: str, group_id: str, usd_to_inr_rate: float=83.5) -> dict:
         batch = await self.db.importbatch.find_unique(where={'id': batch_id})
@@ -74,6 +142,13 @@ class ImportPipeline:
         imported = 0
         skipped = 0
         errors = []
+        
+        events_to_insert = []
+        expenses_to_insert = []
+        splits_to_insert = []
+        balance_deltas = {}  # userId -> delta
+        imported_row_ids = []
+        
         for raw_row in raw_rows:
             row_anomalies = anomaly_map.get(raw_row.id, [])
             unresolved = [a for a in row_anomalies if not a.userDecision or a.userDecision == 'SKIP']
@@ -86,14 +161,39 @@ class ImportPipeline:
                 skipped += 1
                 continue
             try:
-                await self._import_row(raw_row=raw_row, group_id=group_id, batch_id=batch_id, committed_by=committed_by, user_name_map=user_name_map, usd_to_inr_rate=usd_to_inr_rate, member_timelines=timelines)
+                row_data = await self._prepare_import_row(raw_row=raw_row, group_id=group_id, batch_id=batch_id, committed_by=committed_by, user_name_map=user_name_map, usd_to_inr_rate=usd_to_inr_rate, member_timelines=timelines)
+                
+                events_to_insert.extend(row_data['events'])
+                expenses_to_insert.append(row_data['expense'])
+                splits_to_insert.extend(row_data['splits'])
+                
+                for uid, delta in row_data['balances'].items():
+                    balance_deltas[uid] = balance_deltas.get(uid, 0.0) + delta
+                    
+                imported_row_ids.append(raw_row.id)
                 imported += 1
-                await self.db.rawimportrow.update(where={'id': raw_row.id}, data={'status': 'IMPORTED'})
             except Exception as e:
                 errors.append({'row': raw_row.rowNumber, 'error': str(e)})
                 skipped += 1
+                
+        if imported_row_ids:
+            await self.db.rawimportrow.update_many(where={'id': {'in': imported_row_ids}}, data={'status': 'IMPORTED'})
+            
+        if expenses_to_insert:
+            await self.db.projectionexpense.create_many(data=expenses_to_insert)
+        if splits_to_insert:
+            await self.db.projectionexpensesplit.create_many(data=splits_to_insert)
+            
+        for uid, delta in balance_deltas.items():
+            if delta != 0:
+                await self._update_balance(group_id, uid, delta)
+                
+        events_to_insert.append(DomainEvent(aggregate_id=batch_id, aggregate_type=AggregateType.IMPORT, event_type=EventType.IMPORT_COMPLETED, payload={'batch_id': batch_id, 'filename': batch.filename, 'total_rows': batch.totalRows, 'imported_rows': imported, 'anomaly_count': batch.anomalyCount, 'resolved_count': len(anomalies), 'errors': errors}, created_by=committed_by))
+        if events_to_insert:
+            await self.event_store.append_many(events_to_insert)
+            
         await self.db.importbatch.update(where={'id': batch_id}, data={'status': 'COMPLETED', 'importedRows': imported, 'completedAt': datetime.utcnow()})
-        await self.event_store.append(DomainEvent(aggregate_id=batch_id, aggregate_type=AggregateType.IMPORT, event_type=EventType.IMPORT_COMPLETED, payload={'batch_id': batch_id, 'filename': batch.filename, 'total_rows': batch.totalRows, 'imported_rows': imported, 'anomaly_count': batch.anomalyCount, 'resolved_count': len(anomalies), 'errors': errors}, created_by=committed_by))
+        
         anomaly_summary = {}
         for a in anomalies:
             cat = a.category
@@ -116,7 +216,7 @@ class ImportPipeline:
         await self.db.projectionimportreport.upsert(where={'batchId': batch_id}, data={'create': {'batchId': batch_id, 'filename': batch.filename, 'totalRows': batch.totalRows, 'importedRows': 0, 'anomalyCount': batch.anomalyCount, 'resolvedCount': len([a for a in anomalies if a.userDecision]), 'pendingCount': len([a for a in anomalies if not a.userDecision]), 'anomalySummary': Json(anomaly_summary)}, 'update': {'importedRows': 0, 'resolvedCount': len([a for a in anomalies if a.userDecision]), 'pendingCount': len([a for a in anomalies if not a.userDecision]), 'anomalySummary': Json(anomaly_summary)}})
         return {'batch_id': batch_id, 'status': 'REJECTED', 'message': f'Import batch {batch_id} has been rejected.'}
 
-    async def _import_row(self, raw_row, group_id: str, batch_id: str, committed_by: str, user_name_map: dict, usd_to_inr_rate: float, member_timelines: dict):
+    async def _prepare_import_row(self, raw_row, group_id: str, batch_id: str, committed_by: str, user_name_map: dict, usd_to_inr_rate: float, member_timelines: dict) -> dict:
         row = raw_row.rawData or {}
         description = str(row.get('description', 'Imported Expense')).strip()
         raw_amount = str(row.get('amount', '0')).strip().replace(',', '')
@@ -140,18 +240,33 @@ class ImportPipeline:
         paid_by_id = user_name_map.get(paid_by_canonical.lower())
         if not paid_by_id:
             raise ValueError(f"Cannot find user ID for '{paid_by_name}' (normalized: '{paid_by_canonical}')")
+            
         expense_id = cuid.cuid()
-        await self.event_store.append(DomainEvent(aggregate_id=expense_id, aggregate_type=AggregateType.EXPENSE, event_type=EventType.EXPENSE_CREATED, payload={'group_id': group_id, 'description': description, 'amount': converted_amount, 'currency': 'INR', 'original_amount': original_amount if currency != 'INR' else None, 'original_currency': currency if currency != 'INR' else None, 'conversion_rate': rate_used if currency != 'INR' else None, 'paid_by_id': paid_by_id, 'paid_by_name': paid_by_name, 'split_type': split_type.upper(), 'expense_date': date_str, 'is_imported': True, 'import_batch_id': batch_id, 'raw_row_id': raw_row.id, 'notes': notes}, created_by=committed_by))
+        events = []
+        events.append(DomainEvent(aggregate_id=expense_id, aggregate_type=AggregateType.EXPENSE, event_type=EventType.EXPENSE_CREATED, payload={'group_id': group_id, 'description': description, 'amount': converted_amount, 'currency': 'INR', 'original_amount': original_amount if currency != 'INR' else None, 'original_currency': currency if currency != 'INR' else None, 'conversion_rate': rate_used if currency != 'INR' else None, 'paid_by_id': paid_by_id, 'paid_by_name': paid_by_name, 'split_type': split_type.upper(), 'expense_date': date_str, 'is_imported': True, 'import_batch_id': batch_id, 'raw_row_id': raw_row.id, 'notes': notes}, created_by=committed_by))
+        
         splits = self._calculate_splits(split_type=split_type, split_details=split_details, total_amount=converted_amount, user_name_map=user_name_map, split_with=split_with)
+        
+        expense_data = {'id': expense_id, 'groupId': group_id, 'description': description, 'amount': converted_amount, 'currency': 'INR', 'originalAmount': original_amount if currency != 'INR' else None, 'originalCurrency': currency if currency != 'INR' else None, 'conversionRate': rate_used if currency != 'INR' else None, 'paidById': paid_by_id, 'splitType': split_type.upper(), 'expenseDate': expense_date, 'isImported': True, 'importBatchId': batch_id, 'rawRowId': raw_row.id}
+        splits_data = []
+        balances_data = {}
+        
         for user_id, split_amount, pct, shares in splits:
-            await self.event_store.append(DomainEvent(aggregate_id=expense_id, aggregate_type=AggregateType.EXPENSE, event_type=EventType.EXPENSE_SPLIT_ASSIGNED, payload={'expense_id': expense_id, 'user_id': user_id, 'amount': split_amount, 'percentage': pct, 'shares': shares}, created_by=committed_by))
+            events.append(DomainEvent(aggregate_id=expense_id, aggregate_type=AggregateType.EXPENSE, event_type=EventType.EXPENSE_SPLIT_ASSIGNED, payload={'expense_id': expense_id, 'user_id': user_id, 'amount': split_amount, 'percentage': pct, 'shares': shares}, created_by=committed_by))
+            splits_data.append({'expenseId': expense_id, 'userId': user_id, 'amount': split_amount, 'percentage': pct, 'shares': shares})
+            balances_data[user_id] = balances_data.get(user_id, 0.0) - split_amount
+            
         if currency != 'INR':
-            await self.event_store.append(DomainEvent(aggregate_id=expense_id, aggregate_type=AggregateType.EXPENSE, event_type=EventType.CURRENCY_CONVERSION_APPLIED, payload={'expense_id': expense_id, 'original_amount': original_amount, 'original_currency': currency, 'conversion_rate': rate_used, 'converted_amount': converted_amount, 'conversion_date': date_str}, created_by=committed_by))
-        await self.db.projectionexpense.create(data={'id': expense_id, 'groupId': group_id, 'description': description, 'amount': converted_amount, 'currency': 'INR', 'originalAmount': original_amount if currency != 'INR' else None, 'originalCurrency': currency if currency != 'INR' else None, 'conversionRate': rate_used if currency != 'INR' else None, 'paidById': paid_by_id, 'splitType': split_type.upper(), 'expenseDate': expense_date, 'isImported': True, 'importBatchId': batch_id, 'rawRowId': raw_row.id})
-        for user_id, split_amount, pct, shares in splits:
-            await self.db.projectionexpensesplit.create(data={'expenseId': expense_id, 'userId': user_id, 'amount': split_amount, 'percentage': pct, 'shares': shares})
-            await self._update_balance(group_id, user_id, -split_amount)
-        await self._update_balance(group_id, paid_by_id, converted_amount)
+            events.append(DomainEvent(aggregate_id=expense_id, aggregate_type=AggregateType.EXPENSE, event_type=EventType.CURRENCY_CONVERSION_APPLIED, payload={'expense_id': expense_id, 'original_amount': original_amount, 'original_currency': currency, 'conversion_rate': rate_used, 'converted_amount': converted_amount, 'conversion_date': date_str}, created_by=committed_by))
+            
+        balances_data[paid_by_id] = balances_data.get(paid_by_id, 0.0) + converted_amount
+        
+        return {
+            'events': events,
+            'expense': expense_data,
+            'splits': splits_data,
+            'balances': balances_data
+        }
 
     def _calculate_splits(self, split_type: str, split_details: str, total_amount: float, user_name_map: dict, split_with: str='') -> list[tuple]:
         results = []

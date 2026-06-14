@@ -12,12 +12,19 @@ class EventStore:
         record = await self.db.eventstore.create(data={'aggregateId': event.aggregate_id, 'aggregateType': event.aggregate_type, 'eventType': event.event_type, 'eventPayload': Json(event.payload), 'createdBy': event.created_by})
         return record
 
-    async def append_many(self, events: list[DomainEvent]) -> list[dict]:
-        results = []
+    async def append_many(self, events: list[DomainEvent]) -> int:
+        data = []
         for event in events:
-            result = await self.append(event)
-            results.append(result)
-        return results
+            data.append({
+                'aggregateId': event.aggregate_id,
+                'aggregateType': event.aggregate_type,
+                'eventType': event.event_type,
+                'eventPayload': Json(event.payload),
+                'createdBy': event.created_by
+            })
+        if data:
+            return await self.db.eventstore.create_many(data=data)
+        return 0
 
     async def get_events_for_aggregate(self, aggregate_id: str, event_type: Optional[str]=None) -> list[dict]:
         where = {'aggregateId': aggregate_id}

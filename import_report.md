@@ -1,9 +1,9 @@
 # CSV Import & Anomaly Resolution Report
 
-**Batch ID**: `cmqdzgifq0000kftso6zzixzy`  
+**Batch ID**: `cmqe1qugf0000osy239c61nmi`  
 **Filename**: `expenses_export.csv`  
-**Group Name**: `Flatmates` (`cmqdzgh9m00009cc01uvpp2ka`)  
-**Ingestion Date**: 2026-06-14 16:12:49 UTC  
+**Group Name**: `Flatmates` (`cmqe1qtj80000asc0ocgssuhd`)  
+**Ingestion Date**: 2026-06-14 17:16:49 UTC  
 **Total Rows Ingested**: 42  
 **Total Anomalies Flagged**: 46  
 **Rows Successfully Imported**: 13  
@@ -23,23 +23,23 @@ Below is the complete audit trail of all anomalies detected by the ingestion pip
 | 9 | Movie night snacks | `NAME_CASE_MISMATCH` | **LOW** | paid_by='priya' matches member 'Priya' (case mismatch) | `APPROVE` | Normalized paid_by name case to Priya |
 | 11 | Groceries DMart | `UNKNOWN_MEMBER` | **HIGH** | paid_by='Priya S' is not a known group member | `APPROVE` | Mapped name "Priya S" to user Priya |
 | 12 | Aisha birthday cake | `NONSTANDARD_SPLIT_TYPE` | **MEDIUM** | split_type='unequal' is not a recognized type; will be treated as 'exact' | `APPROVE` | Approved custom split |
-| 13 | House cleaning supplies | `SETTLEMENT_AS_EXPENSE` | **HIGH** | description/notes contains settlement keyword 'paid' | `REJECT` | Rejected due to missing payer |
 | 13 | House cleaning supplies | `MISSING_PAYER` | **CRITICAL** | paid_by column is empty or null | `REJECT` | Rejected due to missing payer |
+| 13 | House cleaning supplies | `SETTLEMENT_AS_EXPENSE` | **HIGH** | description/notes contains settlement keyword 'paid' | `REJECT` | Rejected due to missing payer |
 | 14 | Rohan paid Aisha back | `SETTLEMENT_AS_EXPENSE` | **HIGH** | description/notes contains settlement keyword 'paid' | `REJECT` | Rejected as expense; convert to a manual Settlement |
 | 15 | Pizza Friday | `SPLIT_MISMATCH` | **HIGH** | percentage split sums to 110.0% (must be exactly 100%) | `REJECT` | Rejected split mismatch (percentages sum to 110%) |
 | 16 | March rent | `INVALID_DATE` | **HIGH** | date '01/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-01 | `APPROVE` | Parsed date 2026-03-01 |
 | 17 | Groceries BigBasket | `INVALID_DATE` | **HIGH** | date '03/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-03 | `APPROVE` | Parsed date 2026-03-03. Meera was active on this date. |
 | 18 | Wifi bill Mar | `INVALID_DATE` | **HIGH** | date '05/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-05 | `APPROVE` | Parsed date 2026-03-05 |
 | 19 | Goa flights | `INVALID_DATE` | **HIGH** | date '08/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-08 | `APPROVE` | Parsed date 2026-03-08 |
-| 20 | Goa villa booking | `CURRENCY_MISMATCH` | **MEDIUM** | Expense is in USD — historical rate from frankfurter.app will be used for conversion | `REJECT` | Rejected because Dev is not active in March (joined May 1) |
 | 20 | Goa villa booking | `INVALID_DATE` | **HIGH** | date '09/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-09 | `REJECT` | Rejected because Dev is not active in March (joined May 1) |
+| 20 | Goa villa booking | `CURRENCY_MISMATCH` | **MEDIUM** | Expense is in USD — historical rate from frankfurter.app will be used for conversion | `REJECT` | Rejected because Dev is not active in March (joined May 1) |
 | 21 | Beach shack lunch | `INVALID_DATE` | **HIGH** | date '10/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-10 | `APPROVE` | Applied live historical rate. Excluded inactive member Dev. |
 | 21 | Beach shack lunch | `CURRENCY_MISMATCH` | **MEDIUM** | Expense is in USD — historical rate from frankfurter.app will be used for conversion | `APPROVE` | Applied live historical rate. Excluded inactive member Dev. |
-| 22 | Scooter rentals | `NONSTANDARD_SPLIT_TYPE` | **MEDIUM** | split_type='share' is not a recognized type; will be treated as 'shares' | `APPROVE` | Exclude inactive member Dev. Mapped split_type share to shares. |
 | 22 | Scooter rentals | `INVALID_DATE` | **HIGH** | date '10/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-10 | `APPROVE` | Exclude inactive member Dev. Mapped split_type share to shares. |
-| 23 | Parasailing | `CURRENCY_MISMATCH` | **MEDIUM** | Expense is in USD — historical rate from frankfurter.app will be used for conversion | `REJECT` | Rejected due to unknown member Kabir in split list and inactive Dev |
+| 22 | Scooter rentals | `NONSTANDARD_SPLIT_TYPE` | **MEDIUM** | split_type='share' is not a recognized type; will be treated as 'shares' | `APPROVE` | Exclude inactive member Dev. Mapped split_type share to shares. |
 | 23 | Parasailing | `INVALID_DATE` | **HIGH** | date '11/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-11 | `REJECT` | Rejected due to unknown member Kabir in split list and inactive Dev |
 | 23 | Parasailing | `UNKNOWN_MEMBER` | **HIGH** | participant 'Dev's friend Kabir' in split_with is not a known group member | `REJECT` | Rejected due to unknown member Kabir in split list and inactive Dev |
+| 23 | Parasailing | `CURRENCY_MISMATCH` | **MEDIUM** | Expense is in USD — historical rate from frankfurter.app will be used for conversion | `REJECT` | Rejected due to unknown member Kabir in split list and inactive Dev |
 | 24 | Dinner at Thalassa | `INVALID_DATE` | **HIGH** | date '11/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-11 | `APPROVE` | Keep first Thalassa entry |
 | 24 | Dinner at Thalassa | `CONFLICTING_DUPLICATES` | **HIGH** | Near-duplicate of row 25: same date, similar description ('Dinner at Thalassa' vs 'Thalassa dinner'), but different amounts (2400 vs 2450) | `APPROVE` | Keep first Thalassa entry |
 | 25 | Thalassa dinner | `INVALID_DATE` | **HIGH** | date '11/03/2026' is not in YYYY-MM-DD format; likely means 2026-03-11 | `REJECT` | Duplicate entry of Row 24 |

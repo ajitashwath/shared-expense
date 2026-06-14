@@ -61,12 +61,10 @@ async def resolve_anomaly(anomaly_id: str, body: ResolveAnomalyRequest, db: Pris
 
 @router.post('/{batch_id}/resolve-all')
 async def resolve_all_anomalies(batch_id: str, body: ResolveAnomalyRequest, db: Prisma=Depends(get_db), current_user=Depends(require_member_or_admin)):
-    anomalies = await db.anomaly.find_many(where={'batchId': batch_id, 'userDecision': None})
     event_store = EventStore(db)
     pipeline = ImportPipeline(db, event_store)
-    for anomaly in anomalies:
-        await pipeline.resolve_anomaly(anomaly_id=anomaly.id, decision=body.decision, decided_by=current_user.id, notes=body.notes)
-    return {'resolved_count': len(anomalies), 'decision': body.decision}
+    result = await pipeline.resolve_all_anomalies(batch_id=batch_id, decision=body.decision, decided_by=current_user.id, notes=body.notes)
+    return result
 
 @router.post('/{batch_id}/commit')
 async def commit_import(batch_id: str, body: CommitImportRequest, db: Prisma=Depends(get_db), current_user=Depends(require_member_or_admin)):
